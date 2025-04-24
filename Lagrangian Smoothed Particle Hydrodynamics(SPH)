@@ -5,9 +5,9 @@ from matplotlib.patches import Polygon
 from IPython.display import HTML, display
 import ipywidgets as widgets
 
-# -----------------------
+
 # SPH Kernel Functions (cubic spline in 2D)
-# -----------------------
+
 def W(r, h):
     """Cubic spline kernel in 2D."""
     q = r / h
@@ -30,9 +30,9 @@ def dW_dr(r, h):
     out[mask2] = -sigma / h * 0.75 * (2 - q[mask2])**2
     return out
 
-# -----------------------
+
 # SPH Core Functions
-# -----------------------
+
 def compute_densities(positions, m, h):
     """
     Compute density at each fluid particle by summing contributions from all particles 
@@ -64,9 +64,9 @@ def compute_sph_acceleration(positions, velocities, densities, pressures, m, h):
     acc = -m * np.sum(term[:, :, None] * gradW, axis=1)
     return acc
 
-# -----------------------
+
 # Plate Obstacle Functions: Force and Geometry
-# -----------------------
+
 def compute_plate_force(positions, angle, plate_center, plate_length, plate_thickness, h_plate, k_plate):
     """
     For each fluid particle, assign a repulsive force when it is near the plate.
@@ -102,10 +102,10 @@ def create_plate_polygon(angle, plate_center, plate_length, plate_thickness):
     order = np.argsort(angles)
     return corners[order]
 
-# -----------------------
+
 # Main SPH Simulation Function
 # (For a given plate angle in degrees, returns an animation.)
-# -----------------------
+
 def run_sph_simulation(angle_deg):
     angle = -np.deg2rad(angle_deg)
     # Domain and particle initialization.
@@ -221,7 +221,7 @@ def run_sph_simulation(angle_deg):
             positions[:, 1] = positions[:, 1] % Ly
             frame_count += 1
 
-        # -------- Coarse Grid Reconstruction for Vorticity --------
+       #Coarse Grid Reconstruction for Vorticity
         grid_vx = np.zeros((grid_Ny, grid_Nx))
         grid_vy = np.zeros((grid_Ny, grid_Nx))
         count = np.zeros((grid_Ny, grid_Nx))
@@ -238,7 +238,7 @@ def run_sph_simulation(angle_deg):
         dvx_dy = np.gradient(grid_vx, dy, axis=0)
         vorticity = dvy_dx - dvx_dy
 
-        # -------- Update Simulation Display (Vorticity Field) --------
+        # - Update Simulation Display (Vorticity Field) 
         ax_sim.clear()
         im = ax_sim.imshow(vorticity, cmap="gist_rainbow",
                            extent=[0, Lx, 0, Ly], origin="lower", clim=[-0.1, 0.1])
@@ -248,7 +248,7 @@ def run_sph_simulation(angle_deg):
         plate_corners = create_plate_polygon(angle, plate_center, plate_length, plate_thickness)
         ax_sim.add_patch(Polygon(plate_corners, color="black", alpha=0.5))
 
-        #Bernoulli-corrected Pressure Difference --------
+        #Bernoulli-corrected Pressure Difference 
         pressures = compute_pressure(densities, rho0, k_eos)
         velocity_norm = np.linalg.norm(velocities, axis=1)
         bern_pressure = pressures - 0.5 * densities * (velocity_norm**2)
@@ -271,7 +271,7 @@ def run_sph_simulation(angle_deg):
         delta_pressure = bottom_pressure - top_pressure
         pressure_diff_history.append(delta_pressure)
         
-        # -------- Compute conserved Quantities --------
+        #  Compute conserved Quantities 
         # Total kinetic energy INSIDE the canvas.
         mask_canvas = (positions[:, 0] >= 0) & (positions[:, 0] <= Lx) & \
                       (positions[:, 1] >= 0) & (positions[:, 1] <= Ly)
@@ -287,7 +287,7 @@ def run_sph_simulation(angle_deg):
         mass_flow_history.append(mass_flow)
         time_history.append(frame_count)
 
-        # -------- Update Diagnostic Plots --------
+        #  UpdatePlots 
         ax_pressure.clear()
         ax_pressure.plot(time_history, pressure_diff_history, "b-", lw=2)
         ax_pressure.set_title("Net lift force on plate vs Time")
@@ -317,9 +317,8 @@ def run_sph_simulation(angle_deg):
     plt.close(fig)
     return ani
 
-# -----------------------
 # Create an Interactive Widget for the Plate Angle with a Run Button
-# -----------------------
+
 def run_simulation_widget(angle):
     ani = run_sph_simulation(angle)
     return HTML(ani.to_jshtml())
