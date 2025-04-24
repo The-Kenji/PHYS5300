@@ -4,9 +4,8 @@ from matplotlib.animation import FuncAnimation
 from IPython.display import HTML, display
 import ipywidgets as widgets
 
-# ---------------------
 # LBM Simulation Code
-# ---------------------
+
 def main(angle=-30):
     """
     Lattice Boltzmann Simulation of 2D incompressible flow past an angled flat plate.
@@ -16,9 +15,9 @@ def main(angle=-30):
     
     The plate is now placed at a user-specified angle (in degrees), converted internally to radians.
     """
-    # ---------------------
+
     # Simulation parameters
-    # ---------------------
+
     Nx = 400            # resolution in x-direction
     Ny = 100            # resolution in y-direction
     rho0 = 100          # average density
@@ -27,18 +26,18 @@ def main(angle=-30):
     plotEvery = 10      # update the animation every 10 timesteps
     frames = Nt // plotEvery  # number of animation frames
 
-    # ---------------------
+
     # Lattice speeds and weights (D2Q9)
-    # ---------------------
+
     NL = 9
     idxs = np.arange(NL)
     cxs = np.array([0,  0,  1,  1,  1,  0, -1, -1, -1])
     cys = np.array([0,  1,  1,  0, -1, -1, -1,  0,  1])
     weights = np.array([4/9, 1/9, 1/36, 1/9, 1/36, 1/9, 1/36, 1/9, 1/36])
     
-    # ---------------------
+   
     # Initial Conditions
-    # ---------------------
+  
     F = np.ones((Ny, Nx, NL))
     np.random.seed(42)
     F += 0.01 * np.random.randn(Ny, Nx, NL)
@@ -49,9 +48,9 @@ def main(angle=-30):
     for i in idxs:
         F[:, :, i] *= rho0 / rho
     
-    # ---------------------
+
     # Define an angled flat plate (obstacle)
-    # ---------------------
+  
     # Set the plate angle (in radians) according to the user input.
     theta = -np.deg2rad(angle)
     plate_center_x = Nx / 4       # center x-coordinate
@@ -71,18 +70,18 @@ def main(angle=-30):
     bottom_mask = plate & (p < 0)
     top_mask = plate & (p >= 0)
     
-    # ---------------------
+
     # Data storage for pressure difference
-    # ---------------------
+
     pressure_diff_history = []
     time_history = []
     frame_count = 0
     
-    # ---------------------
+   
     # Prepare a figure with two subplots:
     #   ax_sim: Simulation display (vorticity field with obstacle)
     #   ax_press: Plot of ΔPressure (bottom - top) versus time.
-    # ---------------------
+
     fig, (ax_sim, ax_press) = plt.subplots(1, 2, figsize=(10, 4), dpi=80)
     
     # For the simulation display we will update the image each frame.
@@ -103,9 +102,8 @@ def main(angle=-30):
     ax_press.set_ylabel("ΔPressure (Bottom - Top)")
     ax_press.set_title("Pressure Difference vs Time")
 
-    # ---------------------
     # Function to advance the simulation by 'nsteps' timesteps
-    # ---------------------
+  
     def step_simulation(nsteps):
         nonlocal F
         for _ in range(nsteps):
@@ -129,9 +127,9 @@ def main(angle=-30):
             F[plate, :] = bndryF
         return ux, uy, rho
 
-    # ---------------------
+   
     # Update function for the animation
-    # ---------------------
+
     def update(frame):
         nonlocal frame_count
         ux, uy, rho = step_simulation(plotEvery)
@@ -176,9 +174,8 @@ def main(angle=-30):
     plt.close(fig)
     return ani
 
-# ---------------------
 # Widget Code: Slider and Button to Run Simulation
-# ---------------------
+
 def run_simulation_widget(angle):
     ani = main(angle)
     return HTML(ani.to_jshtml())
