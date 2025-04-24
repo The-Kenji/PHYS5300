@@ -18,7 +18,8 @@ As a result, even if you run the simulation twice with nearly identical settings
 
 - Irregular Kinetic Energy:
 The plot of total kinetic energy (even if computed only within the simulation canvas) is expected to oscillate irregularly as the fluid accelerates and decelerates during vortex formation and dissipation.
-You won’t observe a simple periodic energy exchange; instead, there will be bursts of increased energy when vortices are shed, followed by more subdued values as vortices decay or merge.
+There will not be simple periodic energy exchange; instead, there will be bursts of increased energy when vortices are shed, followed by more subdued values as vortices decay or merge.
+
 
 In summary, the simulation outputs  reveal that the flow around the plate is far from steady. There is a complex, ever-changing pattern in the vorticity field; the lift force 
 (and by proxy, the pressure difference across the plate) will vary irregularly; and the associated momentum, mass flow rates, and kinetic energy will all reflect the underlying chaotic behavior.
