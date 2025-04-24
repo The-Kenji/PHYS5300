@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Polygon
 from IPython.display import HTML
 
 
@@ -33,10 +34,9 @@ def dW_dr(r, h):
 
 def compute_densities(positions, m, h):
     """
-    Compute the density at each fluid particle by summing the contributions
+    Compute the density at each fluid particle by summing contributions
     from all particles using the smoothing kernel W.
     """
-    # positions: shape (N, 2)
     rij = positions[:, None, :] - positions[None, :, :]  # (N, N, 2)
     r = np.linalg.norm(rij, axis=2)                        # (N, N)
     W_vals = W(r, h)
@@ -44,91 +44,117 @@ def compute_densities(positions, m, h):
     return rho
 
 def compute_pressure(rho, rho0, k_eos):
-    """A simple equation of state where pressure is proportional to (rho - rho0)."""
+    """A simple EOS: pressure proportional to (rho - rho0)."""
     return k_eos * (rho - rho0)
 
 def compute_sph_acceleration(positions, velocities, densities, pressures, m, h):
     """
-    Compute the acceleration of each fluid particle using a symmetric formulation
-    of the pressure-gradient.
+    Compute acceleration for SPH particles using a symmetric pressure-gradient formulation.
+    (No viscosity or artificial dissipation is included.)
     """
     rij = positions[:, None, :] - positions[None, :, :]    # (N, N, 2)
     r = np.linalg.norm(rij, axis=2)                          # (N, N)
     eps = 1e-3                                             # small epsilon
     gradW = dW_dr(r, h)                                    # (N, N)
-    # Normalize the distance vector (avoiding division-by-zero)
     with np.errstate(divide='ignore', invalid='ignore'):
-        rij_norm = np.where(r[:, :, None] > 0, rij / (r[:, :, None] + eps), 0)
-    gradW = gradW[:, :, None] * rij_norm                   # (N, N, 2)
-    term = (pressures[:, None] / (densities[:, None] ** 2)) + (pressures[None, :] / (densities[None, :] ** 2))
-    acc = -m * np.sum(term[:, :, None] * gradW, axis=1)    # (N, 2)
+        rij_norm = np.where(r[:,:,None] > 0, rij / (r[:,:,None] + eps), 0)
+    gradW = gradW[:,:,None] * rij_norm                     # (N, N, 2)
+    term = (pressures[:, None] / (densities[:, None]**2)) + (pressures[None, :] / (densities[None, :]**2))
+    acc = -m * np.sum(term[:,:,None] * gradW, axis=1)      # (N, 2)
     return acc
 
 
-# Plate Obstacle Force Function
+# Plate Obstacle Functions: Geometry and Force
+
+def create_plate_polygon(angle, plate_center, plate_length, plate_thickness):
+    """
+    Compute the corner coordinates of the flat plate.
+    The flat plate is defined with center 'plate_center', length 'plate_length',
+    and thickness 'plate_thickness'. The plate is rotated by 'angle' (in radians).
+    It returns a list of corner coordinates ordered for drawing a Polygon.
+    """
+    half_L = plate_length / 2
+    half_T = plate_thickness / 2
+    # The plate is oriented so that the longitudinal (along the plate) direction is 
+    # given by [cos(angle), sin(angle)] and its normal is [-sin(angle), cos(angle)].
+    d_vec = np.array([np.cos(angle), np.sin(angle)])
+    n_vec = np.array([-np.sin(angle), np.cos(angle)])
+    # Loop over the combinations of ±half_L and ±half_T.
+    corners = []
+    for s1 in [-1, 1]:
+        for s2 in [-1, 1]:
+            corner = plate_center + s1 * half_L * d_vec + s2 * half_T * n_vec
+            corners.append(corner)
+    corners = np.array(corners)
+    # Order corners for proper polygon drawing.
+    angles = np.arctan2(corners[:,1] - plate_center[1], corners[:,0] - plate_center[0])
+    order = np.argsort(angles)
+    return corners[order]
 
 def compute_plate_force(positions, angle, plate_center, plate_length, plate_thickness, h_plate, k_plate):
     """
-    Compute a repulsive force for each fluid particle near the plate.
+    Compute a repulsive force for each particle when near the plate.
     Positions is an (N,2) array.
     """
     X_rel = positions[:, 0] - plate_center[0]
     Y_rel = positions[:, 1] - plate_center[1]
-    # p: component along the plate's direction, d: normal component.
     p_proj = X_rel * np.cos(angle) + Y_rel * np.sin(angle)
     d_proj = -X_rel * np.sin(angle) + Y_rel * np.cos(angle)
-    threshold = plate_thickness / 2 + h_plate
-    mask = (np.abs(d_proj) < threshold) & (np.abs(p_proj) < (plate_length / 2))
+    threshold = plate_thickness/2 + h_plate
+    mask = (np.abs(d_proj) < threshold) & (np.abs(p_proj) < (plate_length/2))
     force = np.zeros_like(positions)
     magnitude = np.zeros(positions.shape[0])
-    magnitude[mask] = k_plate * (1 - np.abs(d_proj[mask]) / threshold)
+    magnitude[mask] = k_plate * (1 - np.abs(d_proj[mask])/threshold)
     normal = np.array([-np.sin(angle), np.cos(angle)])
     force[mask] = (magnitude[mask][:, None] * np.sign(d_proj[mask])[:, None]) * normal
     return force
 
 
-# SPH Simulation with RK4 Integration
+# SPH Simulation with RK4 Integration and Flat Plate
 
 def run_sph_simulation_RK4(angle_deg):
     """
-    Runs a 2D SPH simulation of external flow around a flat plate using a fourth‑order
-    Runge–Kutta integrator. 
-    """
-    # Convert plate angle to radians.
-    angle = -np.deg2rad(angle_deg)
+    Run a 2D SPH simulation of external flow around a flat plate using a 4th‐order
+    Runge–Kutta integrator. The simulation visualizes the flow via a reconstructed
+    vorticity field and also plots a time series of a pressure difference (as a lift proxy).
     
-    # Domain and initial particle distribution.
+    The flat plate is defined with the same parameters as the original code:
+    center at (Lx/4, Ly/2), length = 100, thickness = 3 (pixels). The plate is rotated
+    by the specified angle (in degrees).
+    """
+    angle = np.deg2rad(angle_deg)
+    # Domain parameters.
     Lx, Ly = 400, 100
     dp = 8  # particle spacing
-    xs = np.arange(dp / 2, Lx, dp)
-    ys = np.arange(dp / 2, Ly, dp)
+    xs = np.arange(dp/2, Lx, dp)
+    ys = np.arange(dp/2, Ly, dp)
     X, Y = np.meshgrid(xs, ys)
-    positions = np.vstack((X.ravel(), Y.ravel())).T  # shape (N,2)
-
-    # Plate (obstacle) parameters.
-    plate_center = np.array([Lx / 4, Ly / 2])
+    positions = np.vstack((X.ravel(), Y.ravel())).T  # (N,2)
+    
+    # Flat plate parameters (same as original).
+    plate_center = np.array([Lx/4, Ly/2])
     plate_length = 100
     plate_thickness = 3
-    # Remove particles initially located inside the plate.
-    X_rel = positions[:, 0] - plate_center[0]
-    Y_rel = positions[:, 1] - plate_center[1]
+    # Remove particles that lie within the plate.
+    X_rel = positions[:,0] - plate_center[0]
+    Y_rel = positions[:,1] - plate_center[1]
     p_proj = X_rel * np.cos(angle) + Y_rel * np.sin(angle)
     d_proj = -X_rel * np.sin(angle) + Y_rel * np.cos(angle)
-    plate_mask = (np.abs(d_proj) < (plate_thickness / 2)) & (np.abs(p_proj) < (plate_length / 2))
-    positions = positions[~plate_mask]  # discard particles inside the plate
+    plate_mask = (np.abs(d_proj) < (plate_thickness/2)) & (np.abs(p_proj) < (plate_length/2))
+    positions = positions[~plate_mask]
     N_particles = positions.shape[0]
     
-    # Initial velocities: uniform horizontal flow plus a small vertical perturbation.
+    # Initial velocities: uniform horizontal inflow plus small vertical noise.
     velocities = np.zeros_like(positions)
     Uin = 0.1
-    velocities[:, 0] = Uin
-    velocities[:, 1] += 0.01 * np.random.randn(N_particles)
+    velocities[:,0] = Uin
+    velocities[:,1] += 0.01 * np.random.randn(N_particles)
     
     # SPH and simulation parameters.
-    m = 1.0       # mass of each particle
+    m = 1.0       # particle mass
     h = 15.0      # smoothing length
     dt = 0.5      # time step
-    Nt = 1000     # total number of timesteps
+    Nt = 1000     # total timesteps
     plotEvery = 10
     frames = Nt // plotEvery
 
@@ -137,16 +163,14 @@ def run_sph_simulation_RK4(angle_deg):
     rho0 = np.mean(densities)
     k_eos = 1.0
 
-    # Plate repulsion parameters.
+    # Plate repulsive force parameters.
     h_plate = 5.0
     k_plate = 0.5
 
-    # Set up the figure for animation.
+    # Set up figure: two subplots (left: vorticity; right: pressure difference vs time)
     fig, (ax_sim, ax_press) = plt.subplots(1, 2, figsize=(10, 4), dpi=80)
     im_obj = ax_sim.imshow(np.zeros((Ly, Lx)), cmap='gist_rainbow', clim=[-0.1, 0.1])
-    ax_sim.set_title("RK4 SPH Flow Vorticity")
-    ax_sim.set_xlabel("x")
-    ax_sim.set_ylabel("y")
+    ax_sim.set_title("RK4 SPH Vorticity")
     ax_sim.axis('off')
     press_line, = ax_press.plot([], [], 'b-', lw=2)
     ax_press.set_xlim(0, frames)
@@ -155,17 +179,15 @@ def run_sph_simulation_RK4(angle_deg):
     ax_press.set_ylabel("ΔPressure")
     ax_press.set_title("Pressure Difference vs Time")
     
-    # Define the ODE function. The state consists of (positions, velocities).  
-    # The derivatives are: d(positions)/dt = velocities, d(velocities)/dt = acceleration.
+    # RK4 integration: ODE function giving d(positions)/dt = velocities and d(velocities)/dt = acceleration.
     def f_ode(pos, vel):
         dens = compute_densities(pos, m, h)
         pres = compute_pressure(dens, rho0, k_eos)
         acc = compute_sph_acceleration(pos, vel, dens, pres, m, h)
         acc += compute_plate_force(pos, angle, plate_center, plate_length, plate_thickness, h_plate, k_plate) / m
         acc += 0.005 * np.random.randn(*acc.shape)
-        return vel, acc   # returns (dpos/dt, dvel/dt)
-    
-    # RK4 integration step.
+        return vel, acc
+
     def rk4_step(pos, vel, dt):
         k1x, k1v = f_ode(pos, vel)
         k2x, k2v = f_ode(pos + dt/2 * k1x, vel + dt/2 * k1v)
@@ -174,8 +196,8 @@ def run_sph_simulation_RK4(angle_deg):
         new_pos = pos + dt/6 * (k1x + 2*k2x + 2*k3x + k4x)
         new_vel = vel + dt/6 * (k1v + 2*k2v + 2*k3v + k4v)
         return new_pos, new_vel
-    
-    # Data storage for diagnostic: pressure difference history.
+
+    # Data storage for diagnostics.
     pressure_diff_history = []
     time_history = []
     frame_count = 0
@@ -183,14 +205,13 @@ def run_sph_simulation_RK4(angle_deg):
     # Update function for animation.
     def update(frame):
         nonlocal positions, velocities, frame_count
-        # Advance simulation for plotEvery timesteps using RK4.
+        # Advance simulation for plotEvery RK4 steps.
         for _ in range(plotEvery):
             positions, velocities = rk4_step(positions, velocities, dt)
             frame_count += 1
-        
-        # For visualization, reconstruct a coarse grid velocity field and compute vorticity.
-        grid_Nx = 100
-        grid_Ny = 25
+
+        # Reconstruct a coarse grid and compute finite difference vorticity.
+        grid_Nx, grid_Ny = 100, 25
         grid_vx = np.zeros((grid_Ny, grid_Nx))
         grid_vy = np.zeros((grid_Ny, grid_Nx))
         count = np.zeros((grid_Ny, grid_Nx))
@@ -198,8 +219,8 @@ def run_sph_simulation_RK4(angle_deg):
         ys_grid = np.linspace(0, Ly, grid_Ny)
         for i in range(N_particles):
             xi, yi = positions[i]
-            ix = int(np.clip(xi / Lx * grid_Nx, 0, grid_Nx - 1))
-            iy = int(np.clip(yi / Ly * grid_Ny, 0, grid_Ny - 1))
+            ix = int(np.clip(xi / Lx * grid_Nx, 0, grid_Nx-1))
+            iy = int(np.clip(yi / Ly * grid_Ny, 0, grid_Ny-1))
             grid_vx[iy, ix] += velocities[i, 0]
             grid_vy[iy, ix] += velocities[i, 1]
             count[iy, ix] += 1
@@ -209,19 +230,23 @@ def run_sph_simulation_RK4(angle_deg):
         dvy_dx = np.gradient(grid_vy, xs_grid, axis=1)
         dvx_dy = np.gradient(grid_vx, ys_grid, axis=0)
         vorticity = dvy_dx - dvx_dy
-        
+
+        # Draw the vorticity field.
         ax_sim.clear()
-        im = ax_sim.imshow(vorticity, cmap='gist_rainbow', 
+        im = ax_sim.imshow(vorticity, cmap='gist_rainbow',
                            extent=[0, Lx, 0, Ly], origin='lower', clim=[-0.1, 0.1])
-        ax_sim.set_title(f"RK4 SPH Flow Vorticity\nTime Step: {frame_count}")
+        # Overlay the flat plate by drawing the computed polygon.
+        plate_corners = create_plate_polygon(angle, plate_center, plate_length, plate_thickness)
+        ax_sim.add_patch(Polygon(plate_corners, color='gray', alpha=0.5))
+        ax_sim.set_title(f"RK4 SPH Vorticity\nTime Step: {frame_count}")
         ax_sim.axis('off')
         
-        # For the pressure difference, use SPH pressure as a proxy.
+        # Diagnostics for the pressure difference.
         dens = compute_densities(positions, m, h)
         pres = compute_pressure(dens, rho0, k_eos)
-        # A simple approximation: let "bottom" be those particles with p_proj < 0, using the original definition.
-        X_rel = positions[:, 0] - plate_center[0]
-        Y_rel = positions[:, 1] - plate_center[1]
+        # Define "bottom" as particles with p_proj < 0.
+        X_rel = positions[:,0] - plate_center[0]
+        Y_rel = positions[:,1] - plate_center[1]
         p_proj = X_rel * np.cos(angle) + Y_rel * np.sin(angle)
         bottom_mask = (p_proj < 0)
         bottom_pressure = np.nanmean(pres[bottom_mask]) if np.any(bottom_mask) else np.nan
@@ -239,14 +264,14 @@ def run_sph_simulation_RK4(angle_deg):
             ax_press.set_ylim(ymin, ymax)
         ax_press.set_xlabel("Time Step")
         ax_press.set_ylabel("ΔPressure")
-        ax_press.set_title("Lift Force on Plate vs Time")
+        ax_press.set_title("Lift (Pressure Difference) vs Time")
         
         return im,
-    
+
     ani = FuncAnimation(fig, update, frames=frames, interval=50, blit=False)
     plt.close(fig)
     return ani
 
-
+# Example of running the RK4 SPH simulation with a plate angle of 30 degrees.
 ani_rk4 = run_sph_simulation_RK4(angle_deg=30)
 HTML(ani_rk4.to_jshtml())
