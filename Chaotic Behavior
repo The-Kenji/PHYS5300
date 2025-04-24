@@ -2,11 +2,11 @@ Chaotic Behavior
 
 
 -Vortex Shedding and Formation:
-Instead of a smooth, steady flow, you should see intermittent formation and shedding of vortices from the edges of the flat plate (especially at the trailing edge). 
-These vortices—often reminiscent of a von Kármán vortex street—may form quasi-periodically, but their exact timing, size, and spacing will vary unpredictably due to the chaotic dynamics.
+Instead of a smooth, steady flow, intermittent formation and shedding of vortices from the edges of the flat plate (especially at the trailing edge). 
+These vortices—may form quasi-periodically, but their exact timing, size, and spacing will vary unpredictably due to the chaotic dynamics.
 
 - Unsteady Lift Force:
-Since the lift force in your simulation is approximated by the difference in pressure (or density, in the LBM case) between the bottom and top sides of the plate, you will notice that the lift force does not stabilize. 
+Since the lift force in the simulation is approximated by the difference in pressure (or density, in the LBM case) between the bottom and top sides of the plate, you will notice that the lift force does not stabilize. 
 Instead, it fluctuates wildly over time. Periods of high lift may be interrupted suddenly by drops or even reversals (negative lift), echoing the complex interaction of vortices around the plate.
 
 - Fluctuating Pressure, Momentum, and Mass Flow:
