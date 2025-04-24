@@ -11,7 +11,8 @@ which are easier to handle numerically.
 The hyperbolic nature of these simplified equations permits the use of straightforward explicit integration schemes without the complications introduced by viscosity.
 
 - Simple Flat-Plate Geometry:
-The obstacle in the simulation is a thin flat plate. Its simple, symmetric geometry results in naturally simplified boundary conditions—especially when dividing the plate into “top” and “bottom” regions for computing pressures—thus aiding in the proper implementation of bounce-back conditions (in the LBM) and other numerical treatments. 
+The obstacle in the simulation is a thin flat plate. Its simple, symmetric geometry results in naturally simplified boundary conditions—especially when dividing the plate into “top” and “bottom” regions for 
+computing pressures—thus aiding in the proper implementation of bounce-back conditions (in the LBM) and other numerical treatments. 
 The flat plate’s symmetry minimizes geometrical complexities that could otherwise complicate the solution process.
 
 - Uniform Inflow and Periodic Boundary Conditions:
