@@ -1,0 +1,33 @@
+The simulation setup employs several key symmetries and assumptions that simplify the solution of the Euler and Lagrangian form of Navier stokes equations for fluid flow (inviscid, incompressible) as well as the Lattice Boltzmann model:
+- Two-Dimensional Domain:
+The simulation is restricted to a two-dimensional space. This reduction in dimensionality decreases the number of variables and the associated computational cost while preserving the essential dynamics of vortex formation and shedding. 
+- Two-Dimensional Domain:
+The simulation is restricted to a two-dimensional space. This reduction in dimensionality decreases the number of variables and the associated computational cost while preserving the essential dynamics of vortex formation and shedding. 
+In two dimensions, the mathematical formulation becomes simpler and visualization of coherent structures (such as vortices) is more straightforward.
+
+- Inviscid and Incompressible Assumptions:
+By assuming that the flow is inviscid (neglecting viscosity) and incompressible, the full Navier–Stokes equations simplify to the Euler equations. This removes the viscous diffusion term, leaving only the convective and pressure components,
+which are easier to handle numerically.
+The hyperbolic nature of these simplified equations permits the use of straightforward explicit integration schemes without the complications introduced by viscosity.
+
+- Simple Flat-Plate Geometry:
+The obstacle in the simulation is a thin flat plate. Its simple, symmetric geometry results in naturally simplified boundary conditions—especially when dividing the plate into “top” and “bottom” regions for computing pressures—thus aiding in the proper implementation of bounce-back conditions (in the LBM) and other numerical treatments. 
+The flat plate’s symmetry minimizes geometrical complexities that could otherwise complicate the solution process.
+
+- Uniform Inflow and Periodic Boundary Conditions:
+The simulation assumes a uniform inflow, typically with a strong horizontal component, paired with periodic boundary conditions along the domain boundaries. These assumptions ensure that the flow remains nearly constant away from the plate, 
+localizing the complexity to the region around the obstacle. This uniformity simplifies both the Euler-based and LBM methods, since fewer adjustments are needed in handling inflow and outflow variations.
+
+- Isotropic Lattice for LBM:
+The Lattice Boltzmann method benefits from employing a symmetric and isotropic discrete velocity set (commonly the D2Q9 configuration in two dimensions).
+This isotropy guarantees that the discrete moments of the distribution functions correctly recover the continuum conservation laws (mass, momentum, and energy) up to the required order.
+The exact streaming implemented by array shifts and the simple Euler update used in the collision step are well-matched to this symmetric arrangement.
+
+- Operator Splitting and Explicit Integration:
+The algorithm divides the time evolution into two distinct steps: an exact streaming (or drift) step and a collision (relaxation) step. The streaming step, handled by shifting arrays (using operations such as np.roll),
+is computed exactly over the discrete lattice. The collision step is then integrated using a first‑order explicit Euler scheme. While higher‑order methods like RK4 exist, 
+he combination of exact streaming and the explicit Euler update is both efficient and sufficiently accurate for capturing the qualitative chaotic phenomena (such as vortex shedding and unsteady lift forces) of interest.
+
+
+
+
