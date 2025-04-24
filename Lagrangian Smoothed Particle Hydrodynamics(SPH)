@@ -1,0 +1,356 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Polygon
+from IPython.display import HTML, display
+import ipywidgets as widgets
+
+# -----------------------
+# SPH Kernel Functions (cubic spline in 2D)
+# -----------------------
+def W(r, h):
+    """Cubic spline kernel in 2D."""
+    q = r / h
+    sigma = 10 / (7 * np.pi * h**2)
+    out = np.zeros_like(r)
+    mask1 = (q >= 0) & (q < 1)
+    mask2 = (q >= 1) & (q < 2)
+    out[mask1] = sigma * (1 - 1.5 * q[mask1]**2 + 0.75 * q[mask1]**3)
+    out[mask2] = sigma * 0.25 * (2 - q[mask2])**3
+    return out
+
+def dW_dr(r, h):
+    """Derivative of the cubic spline kernel with respect to r."""
+    q = r / h
+    sigma = 10 / (7 * np.pi * h**2)
+    out = np.zeros_like(r)
+    mask1 = (q >= 0) & (q < 1)
+    mask2 = (q >= 1) & (q < 2)
+    out[mask1] = sigma / h * (-3 * q[mask1] + 2.25 * q[mask1]**2)
+    out[mask2] = -sigma / h * 0.75 * (2 - q[mask2])**2
+    return out
+
+# -----------------------
+# SPH Core Functions
+# -----------------------
+def compute_densities(positions, m, h):
+    """
+    Compute density at each fluid particle by summing contributions from all particles 
+    using the smoothing kernel W.
+    """
+    rij = positions[:, None, :] - positions[None, :, :]  # shape (N, N, 2)
+    r = np.linalg.norm(rij, axis=2)
+    W_vals = W(r, h)
+    rho = m * np.sum(W_vals, axis=1)
+    return rho
+
+def compute_pressure(rho, rho0, k):
+    """Simple EOS: pressure proportional to (density - rest density)."""
+    return k * (rho - rho0)
+
+def compute_sph_acceleration(positions, velocities, densities, pressures, m, h):
+    """
+    Compute SPH acceleration using the symmetric pressure-gradient formulation.
+    (No artificial viscosity is included here for simplicity.)
+    """
+    rij = positions[:, None, :] - positions[None, :, :]  # shape (N, N, 2)
+    r = np.linalg.norm(rij, axis=2)
+    eps = 1e-3  # avoid singularities
+    gradW_factor = dW_dr(r, h)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rij_normalized = np.where(r[:, :, None] > 0, rij / (r[:, :, None] + eps), 0)
+    gradW = gradW_factor[:, :, None] * rij_normalized
+    term = (pressures[:, None] / (densities[:, None]**2)) + (pressures[None, :] / (densities[None, :]**2))
+    acc = -m * np.sum(term[:, :, None] * gradW, axis=1)
+    return acc
+
+# -----------------------
+# Plate Obstacle Functions: Force and Geometry
+# -----------------------
+def compute_plate_force(positions, angle, plate_center, plate_length, plate_thickness, h_plate, k_plate):
+    """
+    For each fluid particle, assign a repulsive force when it is near the plate.
+    """
+    X_rel = positions[:, 0] - plate_center[0]
+    Y_rel = positions[:, 1] - plate_center[1]
+    # p: coordinate along the plate; d: coordinate normal to the plate.
+    p_proj = X_rel * np.cos(angle) + Y_rel * np.sin(angle)
+    d_proj = -X_rel * np.sin(angle) + Y_rel * np.cos(angle)
+    threshold = plate_thickness / 2 + h_plate
+    mask = (np.abs(d_proj) < threshold) & (np.abs(p_proj) < (plate_length / 2))
+    force = np.zeros_like(positions)
+    magnitude = np.zeros(positions.shape[0])
+    magnitude[mask] = k_plate * (1 - np.abs(d_proj[mask]) / threshold)
+    normal = np.array([-np.sin(angle), np.cos(angle)])  # outward from the plate
+    force[mask] = (magnitude[mask][:, None] * np.sign(d_proj[mask])[:, None]) * normal
+    return force
+
+def create_plate_polygon(angle, plate_center, plate_length, plate_thickness):
+    """
+    Return the corner positions of the rectangular plate as a polygon.
+    """
+    half_L = plate_length / 2
+    half_T = plate_thickness / 2
+    d_vec = np.array([np.cos(angle), np.sin(angle)])
+    n_vec = np.array([-np.sin(angle), np.cos(angle)])
+    corners = []
+    for s1 in [-1, 1]:
+        for s2 in [-1, 1]:
+            corners.append(plate_center + s1 * half_L * d_vec + s2 * half_T * n_vec)
+    corners = np.array(corners)
+    angles = np.arctan2(corners[:, 1] - plate_center[1], corners[:, 0] - plate_center[0])
+    order = np.argsort(angles)
+    return corners[order]
+
+# -----------------------
+# Main SPH Simulation Function
+# (For a given plate angle in degrees, returns an animation.)
+# -----------------------
+def run_sph_simulation(angle_deg):
+    angle = -np.deg2rad(angle_deg)
+    # Domain and particle initialization.
+    Lx = 400
+    Ly = 100
+    dp = 8  # particle spacing
+    xs = np.arange(dp / 2, Lx, dp)
+    ys = np.arange(dp / 2, Ly, dp)
+    X, Y = np.meshgrid(xs, ys)
+    positions = np.vstack((X.ravel(), Y.ravel())).T
+
+    # Flat Plate (obstacle) parameters.
+    plate_center = np.array([Lx/4, Ly/2])
+    plate_length = 100
+    plate_thickness = 3
+    # Remove particles initially located inside the plate.
+    X_rel = positions[:, 0] - plate_center[0]
+    Y_rel = positions[:, 1] - plate_center[1]
+    p_proj = X_rel * np.cos(angle) + Y_rel * np.sin(angle)
+    d_proj = -X_rel * np.sin(angle) + Y_rel * np.cos(angle)
+    plate_mask = (np.abs(d_proj) < (plate_thickness/2)) & (np.abs(p_proj) < (plate_length/2))
+    positions = positions[~plate_mask]
+    
+    # Set up a strong uniform horizontal inflow (wind tunnel).
+    velocities = np.zeros_like(positions)
+    Uin = 1.0  # increased inflow speed
+    velocities[:, 0] = Uin
+    velocities[:, 1] += 0.01 * np.random.randn(positions.shape[0])  # small vertical noise
+
+    # SPH parameters.
+    m = 1.0       # particle mass
+    h = 15.0      # smoothing length
+    dt = 0.5      # time step size
+    Nt = 1000     # total timesteps
+    plotEvery = 10
+    frames = Nt // plotEvery
+    
+    # EOS parameters.
+    densities = compute_densities(positions, m, h)
+    rho0 = np.mean(densities)
+    k_eos = 1.0
+
+    # Plate repulsive force parameters.
+    h_plate = 5.0
+    k_plate = 0.5
+
+    # Data storage for diagnostics.
+    pressure_diff_history = []
+    energy_history = []
+    momentum_history = []
+    mass_flow_history = []
+    time_history = []
+    frame_count = 0
+
+    # Set up a figure with 2 rows × 2 columns:
+    #  - Top-left: Simulation (vorticity field).
+    #  - Top-right: Bernoulli-corrected pressure difference vs time.
+    #  - Bottom-left: Total kinetic energy (inside canvas) vs time.
+    #  - Bottom-right: Total momentum and mass flow vs time.
+    fig, axs = plt.subplots(2, 2, figsize=(16, 10), dpi=80)
+    ax_sim = axs[0, 0]
+    ax_pressure = axs[0, 1]
+    ax_energy = axs[1, 0]
+    ax_diag = axs[1, 1]
+    
+    # For coarse grid reconstruction (for vorticity).
+    grid_Nx = 100
+    grid_Ny = 25
+    grid_x = np.linspace(0, Lx, grid_Nx)
+    grid_y = np.linspace(0, Ly, grid_Ny)
+    dx = grid_x[1] - grid_x[0]
+    dy = grid_y[1] - grid_y[0]
+    
+    # Initial simulation display.
+    vorticity_field = np.zeros((grid_Ny, grid_Nx))
+    im = ax_sim.imshow(vorticity_field, cmap="gist_rainbow",
+                         extent=[0, Lx, 0, Ly], origin="lower", clim=[-0.1, 0.1])
+    ax_sim.set_title(f"SPH Flow Vorticity (Angle = {angle_deg}°)")
+    ax_sim.set_xlabel("x")
+    ax_sim.set_ylabel("y")
+    plate_corners = create_plate_polygon(angle, plate_center, plate_length, plate_thickness)
+    ax_sim.add_patch(Polygon(plate_corners, color="gray", alpha=0.5))
+    
+    # Set up axes for diagnostic plots.
+    ax_pressure.set_title("Bernoulli-corrected Pressure Difference vs Time")
+    ax_pressure.set_xlabel("Time Step")
+    ax_pressure.set_ylabel("ΔPressure")
+    ax_energy.set_title("Total Kinetic Energy (Inside Canvas) vs Time")
+    ax_energy.set_xlabel("Time Step")
+    ax_energy.set_ylabel("Energy")
+    ax_diag.set_title("Momentum and Mass Flow vs Time")
+    ax_diag.set_xlabel("Time Step")
+    ax_diag.set_ylabel("Value")
+    
+    # Detection window for mass flow (vertical window downstream of the plate).
+    x_detect = plate_center[0] + plate_length/2  # x-position downstream
+    detection_window = 5  # in x
+
+    def update(frame):
+        nonlocal positions, velocities, densities, frame_count
+        # Advance the simulation for plotEvery timesteps.
+        for _ in range(plotEvery):
+            densities = compute_densities(positions, m, h)
+            pressures = compute_pressure(densities, rho0, k_eos)
+            acc = compute_sph_acceleration(positions, velocities, densities, pressures, m, h)
+            p_force = compute_plate_force(positions, angle, plate_center, plate_length, plate_thickness, h_plate, k_plate)
+            acc += p_force / m
+            acc += 0.005 * np.random.randn(*acc.shape)  # small perturbation
+            velocities += dt * acc
+            positions += dt * velocities
+            # Apply periodic boundaries.
+            positions[:, 0] = positions[:, 0] % Lx
+            positions[:, 1] = positions[:, 1] % Ly
+            frame_count += 1
+
+        # -------- Coarse Grid Reconstruction for Vorticity --------
+        grid_vx = np.zeros((grid_Ny, grid_Nx))
+        grid_vy = np.zeros((grid_Ny, grid_Nx))
+        count = np.zeros((grid_Ny, grid_Nx))
+        ix = np.clip((positions[:, 0] / Lx * grid_Nx).astype(int), 0, grid_Nx - 1)
+        iy = np.clip((positions[:, 1] / Ly * grid_Ny).astype(int), 0, grid_Ny - 1)
+        for i in range(positions.shape[0]):
+            grid_vx[iy[i], ix[i]] += velocities[i, 0]
+            grid_vy[iy[i], ix[i]] += velocities[i, 1]
+            count[iy[i], ix[i]] += 1
+        mask_nonzero = count > 0
+        grid_vx[mask_nonzero] /= count[mask_nonzero]
+        grid_vy[mask_nonzero] /= count[mask_nonzero]
+        dvy_dx = np.gradient(grid_vy, dx, axis=1)
+        dvx_dy = np.gradient(grid_vx, dy, axis=0)
+        vorticity = dvy_dx - dvx_dy
+
+        # -------- Update Simulation Display (Vorticity Field) --------
+        ax_sim.clear()
+        im = ax_sim.imshow(vorticity, cmap="gist_rainbow",
+                           extent=[0, Lx, 0, Ly], origin="lower", clim=[-0.1, 0.1])
+        ax_sim.set_title(f"SPH Flow Vorticity (Angle = {angle_deg}°)\nStep: {frame_count}")
+        ax_sim.set_xlabel("x")
+        ax_sim.set_ylabel("y")
+        plate_corners = create_plate_polygon(angle, plate_center, plate_length, plate_thickness)
+        ax_sim.add_patch(Polygon(plate_corners, color="black", alpha=0.5))
+
+        #Bernoulli-corrected Pressure Difference --------
+        pressures = compute_pressure(densities, rho0, k_eos)
+        velocity_norm = np.linalg.norm(velocities, axis=1)
+        bern_pressure = pressures - 0.5 * densities * (velocity_norm**2)
+        X_rel = positions[:, 0] - plate_center[0]
+        Y_rel = positions[:, 1] - plate_center[1]
+        p_proj = X_rel * np.cos(angle) + Y_rel * np.sin(angle)
+        d_proj = -X_rel * np.sin(angle) + Y_rel * np.cos(angle)
+        near_threshold = plate_thickness / 2 + h_plate
+        near_plate = (np.abs(d_proj) < near_threshold) & (np.abs(p_proj) < (plate_length / 2))
+        near_bottom = near_plate & (p_proj < 0)
+        near_top = near_plate & (p_proj >= 0)
+        if np.any(near_bottom):
+            bottom_pressure = np.mean(bern_pressure[near_bottom])
+        else:
+            bottom_pressure = 0.0
+        if np.any(near_top):
+            top_pressure = np.mean(bern_pressure[near_top])
+        else:
+            top_pressure = 0.0
+        delta_pressure = bottom_pressure - top_pressure
+        pressure_diff_history.append(delta_pressure)
+        
+        # -------- Compute conserved Quantities --------
+        # Total kinetic energy INSIDE the canvas.
+        mask_canvas = (positions[:, 0] >= 0) & (positions[:, 0] <= Lx) & \
+                      (positions[:, 1] >= 0) & (positions[:, 1] <= Ly)
+        energy = 0.5 * np.sum(np.linalg.norm(velocities[mask_canvas], axis=1)**2)
+        energy_history.append(energy)
+        # Total momentum.
+        momentum = np.sqrt(np.sum(velocities[:, 0])**2 + np.sum(velocities[:, 1])**2)
+        momentum_history.append(momentum)
+        # Mass flow (sum of x-velocity) for particles within the detection window.
+        mask_flow = (positions[:, 0] >= (x_detect - detection_window)) & \
+                    (positions[:, 0] <= (x_detect + detection_window))
+        mass_flow = np.sum(velocities[mask_flow, 0])
+        mass_flow_history.append(mass_flow)
+        time_history.append(frame_count)
+
+        # -------- Update Diagnostic Plots --------
+        ax_pressure.clear()
+        ax_pressure.plot(time_history, pressure_diff_history, "b-", lw=2)
+        ax_pressure.set_title("Net lift force on plate vs Time")
+        ax_pressure.set_xlabel("Time Step")
+        ax_pressure.set_ylabel("ΔPressure")
+        ax_pressure.set_xlim(0, frames * plotEvery)
+
+        ax_energy.clear()
+        ax_energy.plot(time_history, energy_history, "g-", lw=2)
+        ax_energy.set_title("Total Kinetic Energy (Inside Canvas) vs Time")
+        ax_energy.set_xlabel("Time Step")
+        ax_energy.set_ylabel("Energy")
+        ax_energy.set_xlim(0, frames * plotEvery)
+
+        ax_diag.clear()
+        ax_diag.plot(time_history, momentum_history, "r-", lw=2, label="Momentum")
+        ax_diag.plot(time_history, mass_flow_history, "m-", lw=2, label="Mass Flow")
+        ax_diag.set_title("Momentum and Mass Flow vs Time")
+        ax_diag.set_xlabel("Time Step")
+        ax_diag.set_ylabel("Value")
+        ax_diag.legend()
+        ax_diag.set_xlim(0, frames * plotEvery)
+        
+        return im,
+
+    ani = FuncAnimation(fig, update, frames=frames, interval=50, blit=False)
+    plt.close(fig)
+    return ani
+
+# -----------------------
+# Create an Interactive Widget for the Plate Angle with a Run Button
+# -----------------------
+def run_simulation_widget(angle):
+    ani = run_sph_simulation(angle)
+    return HTML(ani.to_jshtml())
+
+# Create a slider widget for the plate angle between -90 and 90 degrees.
+angle_slider = widgets.FloatSlider(
+    value=0.0, min=-90.0, max=90.0, step=1.0,
+    description='Plate Angle (°):',
+    continuous_update=True
+)
+
+# Create a button widget that, when clicked, runs the simulation.
+run_button = widgets.Button(
+    description='Run Simulation',
+    button_style='success'
+)
+
+# Define the callback function.
+def on_run_button_clicked(b):
+    # Clear any previous outputs.
+    display_output.clear_output(wait=True)
+    with display_output:
+        html_anim = run_simulation_widget(angle_slider.value)
+        display(html_anim)
+
+# Set up an output widget to hold the simulation display.
+display_output = widgets.Output()
+
+# Link the button click event to the callback.
+run_button.on_click(on_run_button_clicked)
+
+# Display the slider, button, and output area together.
+ui = widgets.HBox([angle_slider, run_button])
+display(ui, display_output)
